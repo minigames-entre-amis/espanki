@@ -2729,9 +2729,23 @@ function knownWords(n){
     for(const w of toks(d.es))if(w.length>=4&&!STOP.has(w)){out.add(w);if(out.size>=n)return [...out]}
   return [...out];
 }
-function talkPrompt(t){
-  const L0=levelInfo(),words=knownWords(30);
+function talkPrompt(t,mode){
+  const L0=levelInfo(),words=knownWords(30),oral=mode==='voice';
   const scen=t.s.replace('{job}',S.set.job||'').replace('{hobby}',S.set.hobby||'');
+  const voc=words.length?`- Réutilise si possible des mots que je connais déjà : ${words.join(', ')}.\n`:'';
+  if(oral)return `Tu es mon partenaire de conversation ORALE pour apprendre l'espagnol d'Espagne. Je suis francophone, niveau ${L0.lvl}. Nous allons parler en mode vocal : je t'écoute et je te réponds à voix haute.
+
+Situation (jeu de rôle) : ${scen}
+
+Règles :
+- Parle uniquement en espagnol, avec ${L0.rule}.
+- Réponses très courtes (1 ou 2 phrases), naturelles, comme dans une vraie conversation. Termine par une question et attends que je parle.
+- Pas d'émojis, pas de listes, pas de mise en forme : tout est lu à voix haute.
+- Si je fais une faute, reprends ma phrase correctement de façon naturelle (par exemple « Ah, ¿quieres decir: … ? ») puis continue. N'explique en français que si je te le demande.
+- Si je dis « no entiendo », « más despacio » ou si je parle français, répète plus lentement avec des mots plus simples, puis traduis en français.
+${voc}${t.perso?'- Introduis petit à petit 10 mots spécifiques à ce domaine, en donnant leur traduction française la première fois.\n':''}- Quand je dis « fin », fais un bilan en français : mes 3 erreurs les plus importantes et les mots utiles à retenir. Ce bilan, écris-le aussi pour que je puisse le relire.
+
+Pour l'instant, réponds seulement par ta première réplique en espagnol (courte). Je passe ensuite en mode vocal pour continuer.`;
   return `Tu es mon partenaire de conversation pour apprendre l'espagnol d'Espagne. Je suis francophone, niveau ${L0.lvl}.
 
 Situation (jeu de rôle) : ${scen}
@@ -2741,10 +2755,38 @@ Règles :
 - Une seule réplique à la fois, termine par une question, puis attends ma réponse.
 - Après chacune de mes réponses, si j'ai fait des fautes, ajoute une ligne « ✏️ Corrección : » avec ma phrase corrigée et une explication très courte en français. Si c'est correct, ne dis rien de plus.
 - Si j'écris « ? » ou si je réponds en français, reformule plus simplement et donne la traduction française.
-${words.length?`- Réutilise si possible des mots que je connais déjà : ${words.join(', ')}.\n`:''}${t.perso?'- Introduis petit à petit 10 mots ou expressions spécifiques à ce domaine, en gras, avec leur traduction française entre parenthèses la première fois.\n':''}- Quand j'écris « fin » (ou après une quinzaine d'échanges), fais un bilan en français : mes 3 erreurs les plus importantes avec la règle, et une liste des mots et expressions utiles à retenir (espagnol = français).
+${voc}${t.perso?'- Introduis petit à petit 10 mots ou expressions spécifiques à ce domaine, en gras, avec leur traduction française entre parenthèses la première fois.\n':''}- Quand j'écris « fin » (ou après une quinzaine d'échanges), fais un bilan en français : mes 3 erreurs les plus importantes avec la règle, et une liste des mots et expressions utiles à retenir (espagnol = français).
 
 Commence maintenant avec ta première réplique.`;
 }
+/* écrit ou oral : l'utilisateur choisit à chaque conversation */
+function talkModeSheet(t){
+  const ai=S.set.ai?AIS[S.set.ai].n:'ChatGPT ou Claude';
+  $('#sheet').innerHTML=`<div class="ltop"><button class="x" data-act="closeSheet">✕</button><b style="flex:1;font-size:18px">${t.e} ${esc(t.t)}</b></div>
+  <div class="lbody"><p class="mute" style="margin-top:0">Comment veux-tu pratiquer ?</p>
+  <div class="choices">
+   <button class="choice" data-act="talkGo:${t.id}:voice"><span style="font-size:30px">🎙️</span><div><b>À l'oral</b><div class="mute">Tu parles avec ${esc(ai)} en mode vocal. Le meilleur pour apprendre à parler.</div></div></button>
+   <button class="choice" data-act="talkGo:${t.id}:write"><span style="font-size:30px">✍️</span><div><b>À l'écrit</b><div class="mute">Une discussion écrite, avec les corrections détaillées après chaque réponse.</div></div></button>
+  </div></div>`;
+  $('#sheet').classList.remove('hidden');
+}
+/* guide du mode vocal : il faut un geste de l'utilisateur pour ouvrir l'autre site */
+function voiceGuide(t){
+  const k=S.set.ai,ai=k?AIS[k].n:'ChatGPT ou Claude';
+  const how=k==='claude'
+    ?`Dans l'appli <b>Claude</b> (téléphone) : touche l'icône <b>🎙️ mode vocal</b> à droite de la zone de texte. Le mode vocal se trouve dans l'appli mobile ; sur ordinateur, utilise la dictée.`
+    :k==='chatgpt'?`Dans <b>ChatGPT</b> : touche l'icône <b>mode vocal</b> (une onde sonore 〰️) à droite de la zone de texte. Il faut être connecté (compte gratuit).`
+    :`Dans ChatGPT ou Claude, touche l'icône <b>mode vocal</b> à droite de la zone de texte.`;
+  $('#sheet').innerHTML=`<div class="ltop"><button class="x" data-act="closeSheet">✕</button><b style="flex:1;font-size:18px">🎙️ Conversation orale</b></div>
+  <div class="lbody">
+   <div style="margin:12px 0;line-height:1.45"><b>1.</b> ${esc(ai)} s'ouvre et dit sa première phrase.</div>
+   <div style="margin:12px 0;line-height:1.45"><b>2.</b> ${how}</div>
+   <div style="margin:12px 0;line-height:1.45"><b>3.</b> Parle en espagnol ! Dis <b>« no entiendo »</b> ou <b>« más despacio »</b> si besoin, et <b>« fin »</b> pour avoir ton bilan.</div>
+   <div class="tip">💡 Pas de mode vocal ? Utilise le <b>micro du clavier</b> de ton téléphone pour dicter tes réponses : tu parles quand même !</div></div>
+  <div class="lfoot"><div><button class="btn block" data-act="talkOpen:${t.id}:voice">Ouvrir ${esc(ai)}</button></div></div>`;
+  $('#sheet').classList.remove('hidden');
+}
+function closeSheetOnly(){$('#sheet').classList.add('hidden');$('#sheet').innerHTML=''}
 /* ouvre l'assistant choisi (ou demande lequel la première fois) */
 let AIPEND=null;
 function openAI(prompt){
@@ -2765,7 +2807,7 @@ function startTalk(id){
   const t=TALKS.find(x=>x.id===id);if(!t)return;
   if(!talkOpen(t)){toast(`🔒 Ce thème se débloque à l'étape ${t.step}`);return}
   if(t.perso&&!(S.set[t.perso]||'').trim()){return persoForm(t)}
-  openAI(talkPrompt(t));
+  talkModeSheet(t);
 }
 function persoForm(t){
   const job=t.perso==='job';
@@ -2930,10 +2972,13 @@ function doAct(a){
     case 'offline':precacheAll();break;
     case 'talk':startTalk(arg);break;
     case 'talkRandom':randomTalk();break;
+    case 'talkGo':{const p=a.split(':'),t=TALKS.find(x=>x.id===p[1]);if(!t)break;
+      if(p[2]==='voice')voiceGuide(t);else{closeSheetOnly();openAI(talkPrompt(t,'write'))}break}
+    case 'talkOpen':{const p=a.split(':'),t=TALKS.find(x=>x.id===p[1]);if(!t)break;closeSheetOnly();openAI(talkPrompt(t,p[2]));break}
     case 'explain':if(k)openAI(explainPrompt());break;
     case 'setai':S.set.ai=arg;save();$('#sheet').classList.add('hidden');$('#sheet').innerHTML='';if(AIPEND){const p=AIPEND;AIPEND=null;openAI(p)}if(!L)render();break;
     case 'persoOk':{const t=TALKS.find(x=>x.id===arg),v=($('#persoIn')||{}).value||'';if(!t||!v.trim()){toast('Écris quelque chose 🙂');break}
-      S.set[t.perso]=v.trim();save();$('#sheet').classList.add('hidden');$('#sheet').innerHTML='';render();openAI(talkPrompt(t));break}
+      S.set[t.perso]=v.trim();save();render();talkModeSheet(t);break}
     case 'editperso':{const t=TALKS.find(x=>x.id===arg);if(t)persoForm(t);break}
     case 'install':if(INST){INST.prompt();INST=null;render()}break;
     case 'hideInstall':S.set.hideInstall=true;save();render();break;
