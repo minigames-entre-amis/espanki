@@ -213,6 +213,7 @@ u.miss{text-decoration:none;background:rgba(255,75,75,.22);border-radius:4px;pad
 .gex .es{font-size:17px}
 .tip{margin:12px 0;padding:10px 12px;border-radius:14px;background:rgba(255,200,0,.18)}
 .glink{margin-top:8px;border:0;background:rgba(255,255,255,.55);color:var(--blue-d);border-radius:10px;padding:6px 10px;font-weight:900}
+.gcard.lock{opacity:.55}.gcard .edit{font-size:18px;padding:4px}
 .teaser{display:flex;gap:12px;align-items:center;margin-top:14px;cursor:pointer}
 .teaser>span{font-size:36px}.teaser>div{flex:1}.teaser .go{font-size:28px;color:var(--mute)}
 @media (max-width:480px){.stories{grid-template-columns:repeat(2,minmax(0,1fr))}.story .es{font-size:17px}.micbtn{width:84px;height:84px;font-size:36px}}
@@ -2067,6 +2068,7 @@ function viewSet(){
   <div class="row" style="margin-top:10px"><button class="btn blue" data-act="testVoice">🔊 Écouter un exemple</button></div>
   <p class="mute" style="margin:8px 0 0">Les 640 phrases intégrées utilisent une voix neuronale espagnole (Elvira, Espagne) enregistrée dans le dossier <b>audio</b>, à garder à côté de espanki.html. ${esVoices().length?(esVoices().some(v=>/natural|online|google/i.test(v.name))?'Une voix de bonne qualité est disponible : elle est choisie automatiquement.':'Seules des voix basiques sont installées. Sur Edge, les voix « Natural » (Elvira, Álvaro…) sont bien meilleures.'):'Aucune voix espagnole détectée. Sur Edge, elles sont proposées par défaut ; sur Windows, ajoute l\'espagnol dans Paramètres > Heure et langue > Voix.'}</p>
   <label>Prononciation automatique</label>${sel('speak',[[true,'Activée'],[false,'Coupée']])}
+  <label>IA pour les conversations</label>${sel('ai',[['','Me demander'],['chatgpt','ChatGPT'],['claude','Claude']])}
   <label>Exercices oraux (micro)</label>${sel('oral',[[true,'Activés'],[false,'Désactivés']])}
   <p class="mute" style="margin:6px 0 0;font-size:13px">${SRec?'Lire à voix haute : la reconnaissance vocale du navigateur vérifie ta prononciation (Edge ou Chrome, connexion Internet nécessaire).':'Ce navigateur ne propose pas la reconnaissance vocale : seul l\'exercice « répéter » (enregistrement de ta voix comparé au modèle) est disponible.'} Le bouton « Pas maintenant » les met en pause jusqu'à la leçon suivante.</p></div>
   ${'serviceWorker' in navigator&&location.protocol==='https:'?`<h2>Hors ligne</h2><div class="card"><p class="mute" style="margin-top:0">Les sons et images se gardent au fur et à mesure. Pour tout avoir d'un coup (≈ 20 Mo, de préférence en Wi-Fi) :</p><button class="btn blue block" data-act="offline">📥 Tout télécharger pour le hors-ligne</button></div>`:''}
@@ -2359,6 +2361,7 @@ function feedback(ok,title,msg,rating){
   const k=L.cur;
   /* nouvelle phrase : lien vers la fiche de grammaire du thème, si elle n'a pas encore été lue */
   if(k.card.state==='new'&&!k.def.pic){const g=gramFor(k.def.u);if(g&&!S.gram[g.id])msg+=`${msg?'<br>':''}<button class="glink" data-act="gram:${g.id}">📘 Fiche : ${esc(g.title)}</button>`}
+  if(rating<2&&!k.def.pic&&!L.noAI)msg+=`${msg?'<br>':''}<button class="glink" data-act="explain">🤖 Explique-moi mon erreur</button>`;
   k.phase='fb';k.result={ok,title,msg,rating};
   ok?sndOk():sndBad();
   renderLesson();
@@ -2491,6 +2494,7 @@ function judgeSpeak(k,b){
   const rating=say?(b.score>=.8?2:b.score>=.5?1:0):(b.score>=.8?2:1);
   const ok=b.score>=(say?.6:.7);
   if(ok)S.stats.oral=(S.stats.oral||0)+1;
+  k.heard=b.heard;
   const msg=`${spokenHtml(k.def.es,b.hit)}<br><small>Tu as dit : « ${esc(b.heard)} »</small>${say?`<br><small>${esc(k.def.fr)}</small>`:''}`;
   feedback(ok,`${ok?cheer():oops()} · ${pct} %`,msg,rating);
 }
@@ -2648,7 +2652,7 @@ function viewRead(){
   const gr=GRAMMAR.slice().sort((a,b)=>a.step-b.step).map(g=>{const rec=g.step<=cs;
     return `<button class="gcard" data-act="gram:${g.id}"><span>${g.icon}</span><div><b>${esc(g.title)}</b><small class="mute">${S.gram[g.id]?'✅ Lue':rec?'💡 Conseillée pour ton niveau':'Pour plus tard (étape '+g.step+')'}</small></div></button>`}).join('');
   const done=Object.keys(S.stories).length;
-  return `<h2>Histoires <small class="mute">${done}/${STORIES.length}</small></h2>
+  return `${talkSection()}<h2>Histoires <small class="mute">${done}/${STORIES.length}</small></h2>
   <p class="mute" style="margin-top:-4px">Une nouvelle histoire se débloque à chaque étape de ta progression (tu es à l'étape ${cs}). Touche un mot pour voir sa traduction.</p>
   <div class="stories">${st}</div>
   <h2>Fiches de grammaire</h2><div class="gramlist">${gr}</div>`;
@@ -2681,6 +2685,135 @@ function readTeaser(){
   const s=STORIES.find(x=>storyOpen(x)&&!S.stories[x.id]);
   if(!s)return '';
   return `<div class="card teaser" data-act="story:${s.id}"><span>${s.icon}</span><div><b>Nouvelle histoire : ${esc(s.title)}</b><div class="mute">${esc(s.fr)} · +15 XP</div></div><b class="go">›</b></div>`;
+}
+
+/* ============ CONVERSATION AVEC UNE IA (ChatGPT / Claude, compte de l'utilisateur) ============
+   L'appli prépare la consigne et ouvre le site choisi avec le texte déjà rempli (?q=…).
+   Le texte est aussi copié dans le presse-papiers, au cas où le site ne le reprend pas. */
+const AIS={chatgpt:{n:'ChatGPT',e:'🟢',url:q=>'https://chatgpt.com/?q='+encodeURIComponent(q)},
+  claude:{n:'Claude',e:'🟠',url:q=>'https://claude.ai/new?q='+encodeURIComponent(q)}};
+/* thèmes : step = étape à partir de laquelle on le propose */
+const TALKS=[
+ {id:'presente',step:1,e:'🙋',t:'Faire connaissance',s:'Nous nous rencontrons pour la première fois à une fête. Pose-moi des questions simples sur moi (prénom, âge, ville, famille, goûts) et réponds aux miennes.'},
+ {id:'cafe',step:1,e:'☕',t:'Au café',s:'Tu es serveur dans un café de Madrid et je suis client. Je commande à boire et à manger, puis je demande l\'addition.'},
+ {id:'marche',step:2,e:'🍅',t:'Au marché',s:'Tu es marchand de fruits et légumes sur un marché à Valence. J\'achète des produits, je demande les prix et les quantités.'},
+ {id:'famille',step:2,e:'👨‍👩‍👧',t:'Ma famille',s:'Tu es un ami curieux. Pose-moi des questions sur ma famille et mes amis, puis parle-moi de la tienne.'},
+ {id:'journee',step:3,e:'⏰',t:'Ma journée',s:'Tu es un colocataire. On compare nos habitudes : à quelle heure on se lève, ce qu\'on mange, ce qu\'on fait le soir.'},
+ {id:'chemin',step:4,e:'🗺️',t:'Demander son chemin',s:'Je suis touriste à Séville et je cherche des lieux (gare, musée, pharmacie). Tu es un habitant qui m\'indique le chemin.'},
+ {id:'resto',step:4,e:'🍽️',t:'Au restaurant',s:'Tu es serveur dans un restaurant de tapas. Je réserve une table, je commande, j\'ai une petite réclamation, puis je paie.'},
+ {id:'hotel',step:5,e:'🏨',t:'À l\'hôtel',s:'Tu es réceptionniste dans un hôtel à Barcelone. Je réserve une chambre, je pose des questions sur le petit-déjeuner et le quartier.'},
+ {id:'medecin',step:6,e:'🩺',t:'Chez le médecin',s:'Tu es médecin. Je viens te voir parce que je suis malade : tu me demandes mes symptômes et tu me donnes des conseils.'},
+ {id:'magasin',step:6,e:'👕',t:'Dans un magasin',s:'Tu es vendeur dans une boutique de vêtements. Je cherche un vêtement, j\'essaie, la taille ne va pas, je demande le prix.'},
+ {id:'weekend',step:7,e:'🎉',t:'Raconter mon week-end',s:'Tu es un collègue. Le lundi matin, tu me demandes ce que j\'ai fait ce week-end et tu racontes le tien (passé composé et passé simple).'},
+ {id:'vacances',step:8,e:'✈️',t:'Projets de vacances',s:'Tu es un ami. On prépare ensemble des vacances en Espagne : destination, transport, logement, activités (futur et conditionnel).'},
+ {id:'enfance',step:9,e:'🧸',t:'Souvenirs d\'enfance',s:'Tu es un grand-parent espagnol. On échange des souvenirs d\'enfance : où on vivait, nos jeux, l\'école (imparfait).'},
+ {id:'appart',step:10,e:'🔧',t:'Un problème à régler',s:'Tu es le propriétaire de mon appartement. Le chauffage et la douche ne marchent plus : je t\'appelle pour trouver une solution.'},
+ {id:'entretien',step:11,e:'💼',t:'Entretien d\'embauche',s:'Tu es recruteur dans une entreprise espagnole. Tu me fais passer un entretien : parcours, qualités, défauts, disponibilités.'},
+ {id:'debat',step:12,e:'💬',t:'Débat d\'idées',s:'Tu es un ami qui aime débattre. Choisis un sujet de société (réseaux sociaux, écologie, télétravail, tourisme) et donne ton avis ; je donne le mien, tu me contredis poliment.'},
+ {id:'actu',step:14,e:'📰',t:'L\'actualité',s:'Tu es journaliste. Présente-moi une nouvelle inventée mais réaliste, puis discutons-en : causes, conséquences, ce qu\'il faudrait faire (subjonctif bienvenu).'},
+ {id:'metier',step:8,e:'🛠️',t:'Mon métier',perso:'job',s:'Mon métier : {job}. Joue des situations réalistes de mon travail (collègue, client, chef). Fais-moi utiliser le vocabulaire professionnel espagnol de ce métier.'},
+ {id:'passion',step:8,e:'🎸',t:'Ma passion',perso:'hobby',s:'Ma passion : {hobby}. Discute avec moi comme un passionné du même loisir (matériel, techniques, souvenirs, projets). Fais-moi utiliser le vocabulaire espagnol de ce domaine.'},
+ {id:'libre',step:1,e:'🎲',t:'Sujet libre',s:'Propose un sujet de conversation adapté à mon niveau et lance la discussion.'}
+];
+function levelInfo(){
+  const st=curStep();
+  if(st<=3)return {st,lvl:'A1 (grand débutant)',rule:'phrases très courtes (5 à 8 mots), présent uniquement, mots très courants'};
+  if(st<=7)return {st,lvl:'A1-A2 (débutant)',rule:'phrases courtes, surtout le présent, un peu de futur proche (ir a + infinitif)'};
+  if(st<=11)return {st,lvl:'A2-B1 (intermédiaire)',rule:'phrases simples, présent, passé (pretérito perfecto, indefinido, imperfecto) et futur'};
+  return {st,lvl:'B1 (intermédiaire avancé)',rule:'langage naturel, tous les temps, y compris le subjonctif, quelques expressions idiomatiques'};
+}
+const talkOpen=t=>t.step<=curStep();
+function knownWords(n){
+  const out=new Set();
+  for(const d of shuffle(allDefs().filter(d=>!d.pic&&S.cards[d.id]&&S.cards[d.id].state==='review')))
+    for(const w of toks(d.es))if(w.length>=4&&!STOP.has(w)){out.add(w);if(out.size>=n)return [...out]}
+  return [...out];
+}
+function talkPrompt(t){
+  const L0=levelInfo(),words=knownWords(30);
+  const scen=t.s.replace('{job}',S.set.job||'').replace('{hobby}',S.set.hobby||'');
+  return `Tu es mon partenaire de conversation pour apprendre l'espagnol d'Espagne. Je suis francophone, niveau ${L0.lvl}.
+
+Situation (jeu de rôle) : ${scen}
+
+Règles :
+- Parle uniquement en espagnol, avec ${L0.rule}.
+- Une seule réplique à la fois, termine par une question, puis attends ma réponse.
+- Après chacune de mes réponses, si j'ai fait des fautes, ajoute une ligne « ✏️ Corrección : » avec ma phrase corrigée et une explication très courte en français. Si c'est correct, ne dis rien de plus.
+- Si j'écris « ? » ou si je réponds en français, reformule plus simplement et donne la traduction française.
+${words.length?`- Réutilise si possible des mots que je connais déjà : ${words.join(', ')}.\n`:''}${t.perso?'- Introduis petit à petit 10 mots ou expressions spécifiques à ce domaine, en gras, avec leur traduction française entre parenthèses la première fois.\n':''}- Quand j'écris « fin » (ou après une quinzaine d'échanges), fais un bilan en français : mes 3 erreurs les plus importantes avec la règle, et une liste des mots et expressions utiles à retenir (espagnol = français).
+
+Commence maintenant avec ta première réplique.`;
+}
+/* ouvre l'assistant choisi (ou demande lequel la première fois) */
+let AIPEND=null;
+function openAI(prompt){
+  if(!S.set.ai){AIPEND=prompt;return aiPicker()}
+  try{navigator.clipboard&&navigator.clipboard.writeText(prompt).catch(()=>{})}catch(e){}
+  window.open(AIS[S.set.ai].url(prompt),'_blank','noopener');
+  S.stats.talks=(S.stats.talks||0)+1;save();
+  toast(`${AIS[S.set.ai].e} ${AIS[S.set.ai].n} s'ouvre… <div class="mute">Si la consigne n'apparaît pas, colle-la : elle est copiée.</div>`,3600);
+}
+function aiPicker(){
+  $('#sheet').innerHTML=`<div class="ltop"><button class="x" data-act="closeSheet">✕</button><b style="flex:1;font-size:18px">Avec quelle IA veux-tu parler ?</b></div>
+  <div class="lbody"><p class="mute">Tu utiliseras ton propre compte (la version gratuite suffit). Espanki prépare la consigne et l'ouvre directement. Tu pourras changer dans les Réglages.</p>
+  <div class="choices">${Object.entries(AIS).map(([k,a])=>`<button class="choice" data-act="setai:${k}"><span style="font-size:26px">${a.e}</span><b>${a.n}</b></button>`).join('')}</div>
+  <p class="mute" style="margin-top:18px">💡 Astuce : dans l'appli ChatGPT ou Claude, tu peux aussi répondre à la voix 🎤 pour pratiquer l'oral.</p></div>`;
+  $('#sheet').classList.remove('hidden');
+}
+function startTalk(id){
+  const t=TALKS.find(x=>x.id===id);if(!t)return;
+  if(!talkOpen(t)){toast(`🔒 Ce thème se débloque à l'étape ${t.step}`);return}
+  if(t.perso&&!(S.set[t.perso]||'').trim()){return persoForm(t)}
+  openAI(talkPrompt(t));
+}
+function persoForm(t){
+  const job=t.perso==='job';
+  $('#sheet').innerHTML=`<div class="ltop"><button class="x" data-act="closeSheet">✕</button><b style="flex:1;font-size:18px">${t.e} ${t.t}</b></div>
+  <div class="lbody"><label>${job?'Quel est ton métier ?':'Quelle est ta passion ou ton loisir préféré ?'}</label>
+  <input id="persoIn" placeholder="${job?'ex. infirmier, carreleur, développeur…':'ex. montage vidéo, escalade, cuisine…'}" value="${esc(S.set[t.perso]||'')}">
+  <p class="mute">L'IA te fera apprendre le vocabulaire espagnol de ce domaine. Tu pourras le modifier dans la liste des conversations.</p></div>
+  <div class="lfoot"><div><button class="btn block" data-act="persoOk:${t.id}">Lancer la conversation</button></div></div>`;
+  $('#sheet').classList.remove('hidden');setTimeout(()=>{const i=$('#persoIn');if(i)i.focus()},50);
+}
+function randomTalk(){
+  const ok=TALKS.filter(t=>talkOpen(t)&&!t.perso&&t.id!=='libre');
+  const st=curStep(),near=ok.filter(t=>t.step>=st-4);
+  const pool=near.length?near:ok;
+  startTalk(pool[Math.random()*pool.length|0].id);
+}
+function talkSection(){
+  const st=curStep(),L0=levelInfo();
+  /* les thèmes débloqués + les 2 prochains */
+  const locked=TALKS.filter(t=>!talkOpen(t)).sort((a,b)=>a.step-b.step).slice(0,2);
+  const shown=TALKS.filter(t=>talkOpen(t)||locked.includes(t));
+  const cards=shown.map(t=>{const o=talkOpen(t),p=t.perso&&S.set[t.perso];
+    return `<button class="scard ${o?'':'lock'}" data-act="talk:${t.id}"><span class="si" style="font-size:30px">${o?t.e:'🔒'}</span><b>${esc(t.t)}</b><small>${o?(p?esc(p):t.perso?'ton vocabulaire':'jeu de rôle'):'Étape '+t.step}</small>${o&&p?`<em class="edit" data-act="editperso:${t.id}">✏️ modifier</em>`:''}</button>`}).join('');
+  return `<h2>Converser avec une IA</h2>
+  <div class="card"><p class="mute" style="margin-top:0">Une vraie conversation en espagnol avec ${S.set.ai?AIS[S.set.ai].n:'ChatGPT ou Claude'}, adaptée à ton niveau (${L0.lvl}) et aux mots que tu connais. L'IA corrige tes fautes et fait un bilan quand tu écris « fin ».</p>
+  <button class="btn block" data-act="talkRandom">🎲 Lancer une conversation</button></div>
+  <div class="stories" style="margin-top:10px">${cards}</div>`;
+}
+/* « Explique-moi mon erreur » après une mauvaise réponse */
+function myAnswer(k){
+  if(k.heard)return k.heard;
+  if(k.typed)return k.typed;
+  if(k.choices&&k.picked!=null)return k.choices[k.picked];
+  if(k.type==='order'&&k.built&&k.built.length)return k.built.map(i=>k.bank[i].w).join(' ');
+  return '(je ne savais pas)';
+}
+function explainPrompt(){
+  const k=L&&L.cur;if(!k)return '';
+  const what={qcm:'choisir la bonne traduction',type:k.dir==='es-fr'?'traduire en français':'traduire en espagnol',listen:'écrire en espagnol la phrase entendue',
+    cloze:'trouver le mot manquant',order:'remettre les mots dans l\'ordre',speak:'dire la phrase en espagnol'}[k.type]||'exercice';
+  return `J'apprends l'espagnol d'Espagne (je suis francophone, niveau ${levelInfo().lvl}). Dans un exercice (${what}), je me suis trompé.
+
+Phrase : ${k.def.es}
+Traduction : ${k.def.fr}
+Bonne réponse attendue : ${k.answer}
+Ma réponse : ${myAnswer(k)}
+
+Explique-moi en français, simplement et brièvement, pourquoi ma réponse ne va pas et la règle à retenir, avec 2 exemples courts en espagnol (traduits). Si ma réponse était aussi correcte ou presque, dis-le.`;
 }
 
 /* ============ APPLI INSTALLABLE (PWA) ============ */
@@ -2795,6 +2928,13 @@ function doAct(a){
     case 'gram':openGram(arg);break;
     case 'gsay':if(GEX[+arg])speak(GEX[+arg]);break;
     case 'offline':precacheAll();break;
+    case 'talk':startTalk(arg);break;
+    case 'talkRandom':randomTalk();break;
+    case 'explain':if(k)openAI(explainPrompt());break;
+    case 'setai':S.set.ai=arg;save();$('#sheet').classList.add('hidden');$('#sheet').innerHTML='';if(AIPEND){const p=AIPEND;AIPEND=null;openAI(p)}if(!L)render();break;
+    case 'persoOk':{const t=TALKS.find(x=>x.id===arg),v=($('#persoIn')||{}).value||'';if(!t||!v.trim()){toast('Écris quelque chose 🙂');break}
+      S.set[t.perso]=v.trim();save();$('#sheet').classList.add('hidden');$('#sheet').innerHTML='';render();openAI(talkPrompt(t));break}
+    case 'editperso':{const t=TALKS.find(x=>x.id===arg);if(t)persoForm(t);break}
     case 'install':if(INST){INST.prompt();INST=null;render()}break;
     case 'hideInstall':S.set.hideInstall=true;save();render();break;
     case 'reset':if(confirm('Effacer toute ta progression ? Cette action est définitive.')){S=defaults();save();render()}break;
@@ -2817,6 +2957,7 @@ addEventListener('scroll',hideGloss,true);
 document.addEventListener('keydown',e=>{
   if(!$('#sheet').classList.contains('hidden')){
     if(e.key==='Escape')closeSheet();
+    else if(e.key==='Enter'&&document.activeElement&&document.activeElement.id==='persoIn'){const b=$('[data-act^="persoOk"]');if(b)doAct(b.dataset.act)}
     else if(e.key==='Enter'&&ST&&!ST.wait){e.preventDefault();ST.over?closeSheet():advanceStory()}
     else if(ST&&ST.wait&&/^[1-3]$/.test(e.key))storyAnswer(ST.shown.length-1,+e.key-1);
     return;
