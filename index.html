@@ -2304,7 +2304,7 @@ function renderLesson(){
       return `<button class="choice ${cls}" data-act="pick:${i}"><kbd>${i+1}</kbd>${esc(c)}</button>`}).join('')}</div>`;
   }else if(needsInput(k)){
     const ph=k.type==='cloze'?'Le mot manquant…':k.type==='listen'?'Ce que tu entends…':'Ta réponse…';
-    body+=`<input id="typein" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${ph}" ${fb?'disabled':''} value="${esc(k.typed||'')}">`;
+    body+=`<input id="typein" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${ph}" ${fb?'disabled':''} value="${esc(k.typed||'')}">${!fb&&(k.type==='type'&&k.dir==='fr-es'||k.type==='listen')?'<p class="mute" style="margin:8px 0 0;font-size:13px">Pas besoin des ¿ ¡ ni de la ponctuation. Un accent oublié est accepté (il te sera signalé).</p>':''}`;
   }else if(k.type==='order'){
     body+=`<div class="built">${k.built.map((bi,j)=>`<button class="tile" data-act="untile:${j}" ${fb?'disabled':''}>${esc(k.bank[bi].w)}</button>`).join('')}</div>
     <div class="tiles">${k.bank.map((t,i)=>`<button class="tile ${t.used?'used':''}" data-act="tile:${i}" ${t.used||fb?'disabled':''}>${esc(t.w)}</button>`).join('')}</div>`;
@@ -2731,7 +2731,7 @@ function renderPT(){
   $('#sheet').innerHTML=`<div class="ltop"><button class="x" data-act="ptquit">✕</button><div class="pbar"><i style="width:${100*PT.band/PBANDS.length}%;background:var(--purple)"></i></div><span class="tag" style="background:var(--purple)">${b[3]}</span></div>
   <div class="lbody"><div class="mute">Test de niveau · palier ${PT.band+1}/${PBANDS.length} : ${b[2]}</div>${prompt}
    <input id="ptin" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${ph}" value="${esc(PT.typed)}" ${r?'disabled':''}>
-   <p class="mute" style="margin:8px 0 0;font-size:13px">Les accents oubliés ne comptent pas comme des fautes.</p></div>
+   <p class="mute" style="margin:8px 0 0;font-size:13px">Les accents et la ponctuation (¿ ¡ ? !) ne comptent pas comme des fautes.</p></div>
   <div class="lfoot ${r?(r.ok?'ok':'bad'):''}"><div>${r?`<div class="fb"><big>${r.ok?'🦜':'🙈'}</big><div><b>${r.ok?cheer():oops()}</b><span>${r.html}</span></div></div><button class="btn block ${r.ok?'':'red'}" data-act="ptnext">Continuer</button>`
    :`<div class="row"><button class="btn ghost" style="flex:none" data-act="ptcheck:skip">Je ne sais pas</button><button class="btn block" data-act="ptcheck">Vérifier</button></div>`}</div></div>`;
   if(!r)setTimeout(()=>{const i=$('#ptin');if(i)i.focus()},30);
