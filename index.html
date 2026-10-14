@@ -1637,7 +1637,7 @@ let storageOK=true;
 function load(){try{return norm(JSON.parse(localStorage.getItem(KEY)))}catch(e){storageOK=false;return defaults()}}
 /* ---- sauvegarde : navigateur + serveur local (progress.json) + fichier lié ---- */
 let srvMode=false,fileHandle=null,fileNeedsPerm=false,saveTimer=null,syncReady=false;
-function save(){S.savedAt=Date.now();try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){storageOK=false}clearTimeout(saveTimer);saveTimer=setTimeout(syncOut,500)}
+function save(){S.savedAt=Date.now();try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){storageOK=false}clearTimeout(saveTimer);saveTimer=setTimeout(syncOut,500);if(typeof cloudSoon==='function')cloudSoon()}
 async function syncOut(){
   if(!syncReady)return;
   const body=JSON.stringify(S);
@@ -2005,7 +2005,7 @@ function viewHome(){
       <div class="disc">${ring(p,84,8,col)}<i style="background:${col}">${k<cur?'⭐':state==='🔒'?'🔒':k}</i></div>
       <b>${TITLES[i%TITLES.length]}</b><small>Étape ${k} · ${done}/${STEP}</small></div>`;
   }).join('');
-  return `${SHARED?installCard():backupCard()}${placementCard()}
+  return `${SHARED?installCard():backupCard()}${placementCard()}${accountHint()}
   <div class="card"><div class="hero"><div class="parrot">🦜</div><div class="bubble">${msg}</div></div>
     <div class="goal"><div class="ring">${ring(g,84,10,g>=1?'var(--yellow)':'var(--green)')}<b>${S.daily.xp}</b></div>
       <div style="flex:1"><div>Objectif du jour : ${S.daily.xp}/${S.set.goal} XP ${S.daily.goalHit?'✅':''}</div>
@@ -2054,7 +2054,7 @@ function viewCards(){
 }
 function sel(key,opts){return `<select data-set="${key}">${opts.map(([v,n])=>`<option value="${v}" ${String(S.set[key])===String(v)?'selected':''}>${n}</option>`).join('')}</select>`}
 function viewSet(){
-  return `<h2>Réglages</h2><div class="card">
+  return `${accountCard()}<h2>Réglages</h2><div class="card">
   <label>Nouvelles cartes par jour</label>${sel('newPerDay',[5,10,15,20,30].map(n=>[n,n]))}
   <label>Taille d'une leçon</label>${sel('lesson',[[10,'10 cartes'],[20,'20 cartes'],[30,'30 cartes'],[50,'50 cartes']])}
   <label>Objectif quotidien</label>${sel('goal',[[30,'30 XP – Cool'],[50,'50 XP – Normal'],[100,'100 XP – Sérieux'],[200,'200 XP – Intense']])}
@@ -2982,6 +2982,167 @@ Ma réponse : ${myAnswer(k)}
 Explique-moi en français, simplement et brièvement, pourquoi ma réponse ne va pas et la règle à retenir, avec 2 exemples courts en espagnol (traduits). Si ma réponse était aussi correcte ou presque, dis-le.`;
 }
 
+/* ============ COMPTES EN LIGNE (Firebase, API REST) ============
+   Nom d'utilisateur + mot de passe, aucune donnée personnelle. Firebase Authentication exige une adresse :
+   on utilise une adresse fictive <nom>@espanki.invalid (jamais utilisée). Le mot de passe n'est jamais stocké
+   par l'appli : Firebase le conserve haché (scrypt). L'appli ne garde que le jeton de session.
+   Progression : un document Firestore users/<uid> par compte (règles : chacun ne lit/écrit que le sien). */
+const FB={key:'AIzaSyDLo1vLkE2f6qsViyJBR-IRVelO76iv20Q',project:'espanki-64622'};
+const AKEY='espanki-auth';
+let AUTH=(()=>{try{return JSON.parse(localStorage.getItem(AKEY))||null}catch(e){return null}})();
+const CLOUD={busy:false,again:false,timer:0,last:0,err:''};
+const unameOk=u=>/^[a-z0-9_-]{3,20}$/.test(u);
+const fakeMail=u=>u+'@espanki.invalid';
+const saveAuth=()=>{try{AUTH?localStorage.setItem(AKEY,JSON.stringify(AUTH)):localStorage.removeItem(AKEY)}catch(e){}};
+const AERR={EMAIL_EXISTS:'Ce nom d\'utilisateur est déjà pris.',INVALID_LOGIN_CREDENTIALS:'Nom d\'utilisateur ou mot de passe incorrect.',
+  EMAIL_NOT_FOUND:'Nom d\'utilisateur ou mot de passe incorrect.',INVALID_PASSWORD:'Nom d\'utilisateur ou mot de passe incorrect.',
+  WEAK_PASSWORD:'Mot de passe trop court (6 caractères minimum).',TOO_MANY_ATTEMPTS_TRY_LATER:'Trop d\'essais : réessaie dans quelques minutes.',
+  USER_DISABLED:'Ce compte est désactivé.',CREDENTIAL_TOO_OLD_LOGIN_AGAIN:'Reconnecte-toi puis réessaie.'};
+async function idt(path,body){
+  const r=await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:${path}?key=${FB.key}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){const c=((j.error||{}).message||'').split(' ')[0];throw new Error(AERR[c]||('Erreur : '+(c||r.status)))}
+  return j;
+}
+function setSession(j,name){AUTH={uid:j.localId||j.user_id,name,id:j.idToken||j.id_token,refresh:j.refreshToken||j.refresh_token,exp:Date.now()+((+(j.expiresIn||j.expires_in)||3600)-120)*1000};saveAuth()}
+async function token(){
+  if(!AUTH)throw new Error('Non connecté');
+  if(Date.now()<AUTH.exp)return AUTH.id;
+  const r=await fetch(`https://securetoken.googleapis.com/v1/token?key=${FB.key}`,{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'grant_type=refresh_token&refresh_token='+encodeURIComponent(AUTH.refresh)});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok){if(r.status===400){toast('🔒 Ta session a expiré : reconnecte-toi dans les Réglages');AUTH=null;saveAuth()}throw new Error('Session expirée')}
+  setSession(j,AUTH.name);return AUTH.id;
+}
+const docUrl=()=>`https://firestore.googleapis.com/v1/projects/${FB.project}/databases/(default)/documents/users/${AUTH.uid}`;
+async function cloudGet(){
+  const r=await fetch(docUrl(),{headers:{Authorization:'Bearer '+await token()},cache:'no-store'});
+  if(r.status===404)return {data:null,time:null};
+  if(!r.ok)throw new Error('Lecture impossible ('+r.status+')');
+  const j=await r.json();
+  return {data:JSON.parse(j.fields.data.stringValue),time:j.updateTime};
+}
+async function cloudPut(state,time){
+  const pre=time?'currentDocument.updateTime='+encodeURIComponent(time):'currentDocument.exists=false';
+  const body={fields:{data:{stringValue:JSON.stringify(state)},updatedAt:{integerValue:String(Date.now())},v:{integerValue:'1'}}};
+  const r=await fetch(docUrl()+'?'+pre,{method:'PATCH',headers:{Authorization:'Bearer '+await token(),'Content-Type':'application/json'},body:JSON.stringify(body)});
+  if(r.status===400||r.status===409||r.status===412)return false;   /* modifié entre-temps par un autre appareil : on recommence */
+  if(!r.ok)throw new Error('Envoi impossible ('+r.status+')');
+  return true;
+}
+/* ---- fusion de deux progressions (appareil + compte) ----
+   cartes : la plus récemment révisée ; compteurs (XP, révisions…) : ceux du compte + ce que cet appareil
+   a gagné depuis sa dernière synchronisation ; listes (badges, histoires…) : réunion. */
+const CNT=['reviews','correct','oral','talks','lookups','chests','freezeUsed'];
+const counters=s=>{const o={xp:s.xp||0};for(const k of CNT)o[k]=(s.stats||{})[k]||0;return o};
+function pickCard(x,y){
+  const r=c=>[c.state==='new'?0:1,c.last==null?-1:c.last,c.reps||0];
+  const a=r(x),b=r(y);for(let i=0;i<3;i++)if(a[i]!==b[i])return a[i]>b[i]?x:y;
+  return x;
+}
+function mergeState(local,remote,base){
+  const a=norm(JSON.parse(JSON.stringify(local))),b=norm(JSON.parse(JSON.stringify(remote)));
+  const newer=(a.savedAt||0)>=(b.savedAt||0)?a:b,o=norm(JSON.parse(JSON.stringify(newer)));
+  o.cards={};for(const id of new Set([...Object.keys(a.cards),...Object.keys(b.cards)])){const x=a.cards[id],y=b.cards[id];o.cards[id]=!x?y:!y?x:pickCard(x,y)}
+  const cus=new Map();for(const c of [...b.custom,...a.custom])cus.set(c.id,c);o.custom=[...cus.values()];
+  const ca=counters(a),cb=counters(b),bs=base||{};
+  o.xp=cb.xp+Math.max(0,ca.xp-(bs.xp||0));
+  for(const k of CNT)o.stats[k]=cb[k]+Math.max(0,ca[k]-(bs[k]||0));
+  o.hist={...b.hist};for(const [d,n] of Object.entries(a.hist))o.hist[d]=Math.max(n,o.hist[d]||0);
+  o.frozen={...b.frozen,...a.frozen};
+  o.badges={...a.badges,...b.badges};for(const [k,v] of Object.entries(a.badges))if(!o.badges[k]||v<o.badges[k])o.badges[k]=v;
+  o.stories={...a.stories};for(const [k,v] of Object.entries(b.stories||{}))o.stories[k]=o.stories[k]?{...v,err:Math.min(v.err,o.stories[k].err)}:v;
+  o.gram={...a.gram,...b.gram};
+  const lead=a.lastDay!==b.lastDay?(a.lastDay>b.lastDay?a:b):(a.streak>=b.streak?a:b);
+  o.lastDay=lead.lastDay;o.streak=lead.streak;o.best=Math.max(a.best||0,b.best||0);
+  if(a.daily.day!==b.daily.day)o.daily=JSON.parse(JSON.stringify(a.daily.day>b.daily.day?a.daily:b.daily));
+  else{const qp=d=>(d.quests||[]).reduce((s,q)=>s+q.p,0),dd=JSON.parse(JSON.stringify(qp(a.daily)>=qp(b.daily)?a.daily:b.daily));
+    for(const k of ['xp','reviewed','newDone','chest'])dd[k]=Math.max(a.daily[k]||0,b.daily[k]||0);dd.goalHit=a.daily.goalHit||b.daily.goalHit;o.daily=dd}
+  o.placed=a.placed||b.placed;
+  return o;
+}
+/* synchronise : lit le compte, fusionne, renvoie ; recommence si un autre appareil a écrit entre-temps */
+async function cloudSync(quiet){
+  if(!AUTH)return;
+  if(CLOUD.busy){CLOUD.again=true;return}
+  CLOUD.busy=true;CLOUD.err='';
+  try{
+    for(let i=0;i<4;i++){
+      const r=await cloudGet();
+      const merged=r.data?mergeState(S,r.data,S.uid===AUTH.uid?S.syncBase:null):JSON.parse(JSON.stringify(S));
+      merged.uid=AUTH.uid;merged.syncBase=counters(merged);
+      if(await cloudPut(merged,r.time)){
+        const changed=JSON.stringify(merged.cards)!==JSON.stringify(S.cards)||merged.xp!==S.xp;
+        S=norm(merged);S.uid=merged.uid;S.syncBase=merged.syncBase;
+        try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}
+        CLOUD.last=Date.now();
+        if(changed&&!L)render();else{renderChips();if(tab==='set'&&!L)render()}
+        if(!quiet)toast('☁️ Progression synchronisée');
+        break;
+      }
+    }
+  }catch(e){CLOUD.err=e.message||'hors ligne'}
+  CLOUD.busy=false;
+  if(CLOUD.again){CLOUD.again=false;cloudSync(true)}
+}
+function cloudSoon(){if(AUTH){clearTimeout(CLOUD.timer);CLOUD.timer=setTimeout(()=>cloudSync(true),4000)}}
+async function signUp(){
+  const u=($('#acUser').value||'').trim().toLowerCase(),p=$('#acPass').value||'',p2=($('#acPass2')||{}).value;
+  if(!unameOk(u))return acMsg('Nom d\'utilisateur : 3 à 20 caractères, lettres minuscules, chiffres, _ ou -.');
+  if(p.length<6)return acMsg('Mot de passe : 6 caractères minimum.');
+  if(p!==p2)return acMsg('Les deux mots de passe ne sont pas identiques.');
+  if(!$('#acOk').checked)return acMsg('Coche la case : sans mot de passe, le compte ne pourra pas être récupéré.');
+  try{acMsg('Création du compte…',1);setSession(await idt('signUp',{email:fakeMail(u),password:p,returnSecureToken:true}),u);
+    S.uid=null;await cloudSync(true);toast(`☁️ Compte « ${esc(u)} » créé : ta progression est sauvegardée en ligne`,3600);render()}
+  catch(e){acMsg(e.message)}
+}
+async function signIn(){
+  const u=($('#acUser').value||'').trim().toLowerCase(),p=$('#acPass').value||'';
+  if(!u||!p)return acMsg('Entre ton nom d\'utilisateur et ton mot de passe.');
+  try{acMsg('Connexion…',1);setSession(await idt('signInWithPassword',{email:fakeMail(u),password:p,returnSecureToken:true}),u);
+    const had=S.stats.reviews>0;if(S.uid&&S.uid!==AUTH.uid){S=defaults()}
+    await cloudSync(true);toast(`☁️ Connecté : ${esc(u)}${had?' · progression de cet appareil ajoutée':''}`,3600);render()}
+  catch(e){acMsg(e.message)}
+}
+async function signOut(){
+  if(!confirm('Se déconnecter ? La progression est gardée dans ton compte et sera retirée de cet appareil.'))return;
+  try{await cloudSync(true)}catch(e){}
+  if(CLOUD.err&&!confirm('La dernière synchronisation a échoué ('+CLOUD.err+'). Se déconnecter quand même ? Les derniers progrès de cet appareil seront perdus.'))return;
+  AUTH=null;saveAuth();S=defaults();save();render();toast('Déconnecté');
+}
+async function deleteAccount(){
+  const p=prompt('Supprimer définitivement ton compte et ta progression en ligne ?\nPour confirmer, entre ton mot de passe :');
+  if(!p)return;
+  try{const name=AUTH.name;setSession(await idt('signInWithPassword',{email:fakeMail(name),password:p,returnSecureToken:true}),name);
+    await fetch(docUrl(),{method:'DELETE',headers:{Authorization:'Bearer '+AUTH.id}});
+    await idt('delete',{idToken:AUTH.id});
+    AUTH=null;saveAuth();delete S.uid;delete S.syncBase;save();render();toast('🗑️ Compte supprimé. La progression reste sur cet appareil.',3600)}
+  catch(e){toast(e.message)}
+}
+let ACMODE='new';
+function acMsg(t,info){const m=$('#acMsg');if(m){m.textContent=t;m.style.color=info?'var(--mute)':'var(--red-d)'}}
+function accountCard(){
+  if(AUTH)return `<h2>Compte</h2><div class="card"><b>☁️ Connecté : ${esc(AUTH.name)}</b>
+    <p class="mute" style="margin:6px 0 12px">Ta progression est sauvegardée en ligne et se retrouve sur tous tes appareils. ${CLOUD.err?`<span style="color:var(--red-d)">Dernière synchronisation échouée (${esc(CLOUD.err)}) : nouvel essai automatique.</span>`:CLOUD.last?'Dernière synchronisation : '+new Date(CLOUD.last).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+'.':''}</p>
+    <div style="display:grid;gap:8px"><button class="btn blue" data-act="cloudSync">Synchroniser maintenant</button><button class="btn ghost" data-act="signOut">Se déconnecter</button>
+    <button class="btn ghost" style="color:var(--red-d)" data-act="delAccount">Supprimer mon compte</button></div></div>`;
+  const neu=ACMODE==='new';
+  return `<h2>Compte</h2><div class="card"><p class="mute" style="margin-top:0">Un compte sauvegarde ta progression en ligne pour la retrouver sur ton téléphone et ton ordinateur. Juste un nom d'utilisateur et un mot de passe : aucune adresse e-mail, aucune donnée personnelle.</p>
+   <div class="row" style="margin-bottom:6px"><button class="btn ${neu?'':'ghost'}" data-act="acMode:new">Créer un compte</button><button class="btn ${neu?'ghost':''}" data-act="acMode:login">Se connecter</button></div>
+   <label>Nom d'utilisateur</label><input id="acUser" autocomplete="username" autocapitalize="off" spellcheck="false" placeholder="ex. gaetan_es">
+   <label>Mot de passe</label><input id="acPass" type="password" autocomplete="${neu?'new-password':'current-password'}" placeholder="6 caractères minimum">
+   ${neu?`<label>Confirme le mot de passe</label><input id="acPass2" type="password" autocomplete="new-password">
+   <label style="display:flex;gap:8px;align-items:flex-start;color:var(--ink)"><input id="acOk" type="checkbox" style="width:auto;margin-top:3px"> <span>J'ai compris : <b>il n'y a pas de récupération de mot de passe</b>. Si je l'oublie, mon compte est perdu.</span></label>`:''}
+   <div id="acMsg" class="mute" style="min-height:20px;margin:8px 0"></div>
+   <button class="btn block" data-act="${neu?'signUp':'signIn'}">${neu?'Créer mon compte':'Me connecter'}</button>
+   ${S.stats.reviews>0?`<p class="mute" style="margin-bottom:0;font-size:13px">La progression déjà faite sur cet appareil sera ajoutée à ton compte.</p>`:''}</div>`;
+}
+addEventListener('online',()=>cloudSync(true));
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')cloudSync(true);else if(AUTH&&!CLOUD.busy)cloudSync(true)});
+function accountHint(){
+  if(AUTH||S.set.hideAcc||S.stats.reviews<20)return '';
+  return `<div class="card teaser" data-act="tab:set" style="margin-top:0;margin-bottom:12px;border-color:var(--blue)"><span>☁️</span><div><b>Sauvegarde ta progression en ligne</b><div class="mute">Crée un compte (nom + mot de passe) pour la retrouver sur tous tes appareils.</div></div><button class="x" style="font-size:18px" data-act="hideAcc" title="Masquer">✕</button></div>`;
+}
+
 /* ============ APPLI INSTALLABLE (PWA) ============ */
 let INST=null;
 addEventListener('beforeinstallprompt',e=>{e.preventDefault();INST=e;if(!L&&tab==='home')render()});
@@ -3096,6 +3257,13 @@ function doAct(a){
     case 'offline':precacheAll();break;
     case 'talk':startTalk(arg);break;
     case 'talkRandom':randomTalk();break;
+    case 'acMode':ACMODE=arg;render();break;
+    case 'signUp':signUp();break;
+    case 'signIn':signIn();break;
+    case 'signOut':signOut();break;
+    case 'delAccount':deleteAccount();break;
+    case 'cloudSync':cloudSync(false).then(()=>{if(CLOUD.err)toast('☁️ Échec : '+esc(CLOUD.err))});break;
+    case 'hideAcc':S.set.hideAcc=true;save();render();break;
     case 'placement':startPlacement();break;
     case 'ptcheck':ptCheck(arg==='skip');break;
     case 'ptslow':if(PT)speak(PT.q.d.es,.55);break;
@@ -3130,6 +3298,7 @@ document.addEventListener('change',e=>{
 });
 addEventListener('scroll',hideGloss,true);
 document.addEventListener('keydown',e=>{
+  if(e.key==='Enter'&&document.activeElement&&/^ac(User|Pass2?)$/.test(document.activeElement.id)){e.preventDefault();doAct(ACMODE==='new'?'signUp':'signIn');return}
   if(!$('#sheet').classList.contains('hidden')){
     if(e.key==='Escape')closeSheet();
     else if(e.key==='Enter'&&document.activeElement&&document.activeElement.id==='persoIn'){const b=$('[data-act^="persoOk"]');if(b)doAct(b.dataset.act)}
@@ -3160,7 +3329,7 @@ document.addEventListener('keydown',e=>{
 });
 if('speechSynthesis' in window){speechSynthesis.getVoices();speechSynthesis.onvoiceschanged=()=>{if(tab==='set'&&!L)render()}}
 addEventListener('pagehide',()=>{if(srvMode&&syncReady){try{navigator.sendBeacon('/api/progress',new Blob([JSON.stringify(S)],{type:'application/json'}))}catch(e){}}});
-render();initSync();
+render();initSync();setTimeout(()=>cloudSync(true),1500);
 </script>
 </body>
 </html>
