@@ -2284,7 +2284,7 @@ function renderLesson(){
     if(fb&&!prompt)prompt=spk+`<span>${esc(d.es)}</span>`;
   }
   else if(k.type==='order'){label='Traduis en espagnol : touche les mots dans le bon ordre';prompt=(fb?spk:'')+`<span>${esc(d.fr)}</span>`}
-  else if(k.type==='cloze'){label=k.czMode==='pick'?'Choisis le mot manquant':'Écris le mot manquant';prompt=(fb?spk:'')+`<span>${clozeHtml(k)}</span>`;after=`<div class="hint">💡 ${esc(d.fr)}</div>`}
+  else if(k.type==='cloze'){label=k.czMode==='pick'?'Choisis le mot manquant':'Écris le mot manquant';prompt=(fb?spk:'')+`<span>${clozeHtml(k)}</span>`}
   else if(k.type==='listen'){label='Écris en espagnol ce que tu entends';prompt=`<button class="spk big" data-act="speak">🔊</button><button class="spk big" data-act="speakslow" title="Plus lentement">🐢</button>`}
   else if(k.type==='speak'||k.type==='shadow'){const o=oralView(k);label=o.label;prompt=o.prompt;after=o.body}
   else{
@@ -2360,6 +2360,7 @@ function judgeAndFeedback(k){
 }
 function feedback(ok,title,msg,rating){
   const k=L.cur;
+  if(k.type==='cloze')msg+=`${msg?'<br>':''}<span style="opacity:.85">${esc(k.def.fr)}</span>`;
   /* nouvelle phrase : lien vers la fiche de grammaire du thème, si elle n'a pas encore été lue */
   if(k.card.state==='new'&&!k.def.pic){const g=gramFor(k.def.u);if(g&&!S.gram[g.id])msg+=`${msg?'<br>':''}<button class="glink" data-act="gram:${g.id}">📘 Fiche : ${esc(g.title)}</button>`}
   if(rating<2&&!k.def.pic&&!L.noAI)msg+=`${msg?'<br>':''}<button class="glink" data-act="explain">🤖 Explique-moi mon erreur</button>`;
@@ -2700,42 +2701,63 @@ function placementCard(){
   return `<div class="card teaser" data-act="placement" style="margin-top:0;margin-bottom:12px;border-color:var(--purple)"><span>🧭</span><div><b>Tu parles déjà un peu espagnol ?</b><div class="mute">Fais le test de niveau (3 à 8 min) pour ne pas recommencer à zéro.</div></div><b class="go">›</b></div>`;
 }
 function bandDefs(i){const [a,b]=PBANDS[i];return allDefs().filter(d=>!d.pic&&d.u>=a&&d.u<=b)}
+/* questions à réponse libre (pas de propositions : impossible de deviner) :
+   mot manquant (avec la traduction), dictée, traduction français → espagnol */
+const PKINDS=['cloze','listen','trans','cloze'];
 function makePQ(i,k){
-  const defs=shuffle(bandDefs(i)),used=PT?PT.used:new Set();
-  const d=defs.find(x=>!used.has(x.id))||defs[0];used.add(d.id);
-  if(k%2===1){const z=makeCloze(d);if(z&&z.opts)return {kind:'cloze',d,z,opts:z.opts,ans:z.word}}
-  const pool=shuffle(allDefs().filter(x=>!x.pic&&x.id!==d.id&&x.fr!==d.fr&&Math.abs(x.u-d.u)<=6)).slice(0,3).map(x=>x.fr);
-  return {kind:'qcm',d,opts:shuffle([d.fr,...pool]),ans:d.fr};
+  const used=PT?PT.used:new Set(),kind=PKINDS[k%PKINDS.length];
+  let defs=shuffle(bandDefs(i).filter(x=>!used.has(x.id)));
+  if(kind!=='cloze')defs.sort((a,b)=>toks(a.es).length-toks(b.es).length).splice(Math.ceil(defs.length*.7));  /* phrases pas trop longues à taper */
+  for(const d of shuffle(defs)){
+    if(kind==='cloze'){const z=makeCloze(d);if(!z)continue;used.add(d.id);return {kind,d,z,ans:z.word}}
+    used.add(d.id);return {kind,d,ans:d.es};
+  }
+  const d=bandDefs(i)[0];return {kind:'trans',d,ans:d.es};
 }
 function startPlacement(){
-  PT={band:0,k:0,ok:0,bad:0,passed:0,used:new Set(),n:0,q:null,picked:null};
+  PT={band:0,k:0,ok:0,bad:0,passed:0,used:new Set(),n:0,q:null,res:null,typed:''};
   PT.q=makePQ(0,0);
   $('#sheet').classList.remove('hidden');renderPT();
+  if(PT.q.kind==='listen')speak(PT.q.d.es);
 }
 function renderPT(){
-  const q=PT.q,b=PBANDS[PT.band],fb=PT.picked!=null;
+  const q=PT.q,b=PBANDS[PT.band],r=PT.res;
+  const spk=`<button class="spk" data-act="ptsay">🔊</button><button class="spk" data-act="ptslow" title="Plus lentement">🐢</button>`;
   let prompt;
-  if(q.kind==='qcm')prompt=`<div class="q">Que veut dire cette phrase ?</div><div class="prompt"><button class="spk" data-act="ptsay">🔊</button><span>${esc(q.d.es)}</span></div>`;
-  else prompt=`<div class="q">Choisis le mot manquant</div><div class="prompt"><span>${q.z.ch.map((c,i)=>i===q.z.idx?`${esc(c.pre)}<span class="blank ${fb?(q.opts[PT.picked]===q.ans?'ok':'bad'):''}">${fb?esc(c.w):'&nbsp;'}</span>${esc(c.post)}`:esc(c.raw)).join(' ')}</span></div><div class="hint">💡 ${esc(q.d.fr)}</div>`;
-  const opts=q.opts.map((o,i)=>{let c='';if(fb)c='dis '+(o===q.ans?'right':i===PT.picked?'wrong':'');
-    return `<button class="choice ${c}" data-act="ptpick:${i}"><kbd>${i+1}</kbd>${esc(o)}</button>`}).join('');
+  if(q.kind==='cloze')prompt=`<div class="q">Écris le mot manquant</div><div class="prompt"><span>${q.z.ch.map((c,i)=>i===q.z.idx?`${esc(c.pre)}<span class="blank ${r?(r.ok?'ok':'bad'):''}">${r?esc(c.w):'&nbsp;'}</span>${esc(c.post)}`:esc(c.raw)).join(' ')}</span></div><div class="hint">💡 ${esc(q.d.fr)}</div>`;
+  else if(q.kind==='listen')prompt=`<div class="q">Écoute et écris en espagnol ce que tu entends</div><div class="prompt"><button class="spk big" data-act="ptsay">🔊</button><button class="spk big" data-act="ptslow" title="Plus lentement">🐢</button></div>`;
+  else prompt=`<div class="q">Traduis en espagnol</div><div class="prompt"><span>${esc(q.d.fr)}</span></div>`;
+  const ph=q.kind==='cloze'?'Le mot manquant…':q.kind==='listen'?'Ce que tu entends…':'Ta traduction…';
   $('#sheet').innerHTML=`<div class="ltop"><button class="x" data-act="ptquit">✕</button><div class="pbar"><i style="width:${100*PT.band/PBANDS.length}%;background:var(--purple)"></i></div><span class="tag" style="background:var(--purple)">${b[3]}</span></div>
-  <div class="lbody"><div class="mute">Test de niveau · palier ${PT.band+1}/${PBANDS.length} : ${b[2]}</div>${prompt}<div class="choices ${q.kind==='cloze'?'words':''}">${opts}</div></div>
-  <div class="lfoot"><div>${fb?`<button class="btn block" data-act="ptnext">Continuer</button>`:`<button class="btn ghost block" data-act="ptpick:-1">Je ne sais pas</button>`}</div></div>`;
+  <div class="lbody"><div class="mute">Test de niveau · palier ${PT.band+1}/${PBANDS.length} : ${b[2]}</div>${prompt}
+   <input id="ptin" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="${ph}" value="${esc(PT.typed)}" ${r?'disabled':''}>
+   <p class="mute" style="margin:8px 0 0;font-size:13px">Les accents oubliés ne comptent pas comme des fautes.</p></div>
+  <div class="lfoot ${r?(r.ok?'ok':'bad'):''}"><div>${r?`<div class="fb"><big>${r.ok?'🦜':'🙈'}</big><div><b>${r.ok?cheer():oops()}</b><span>${r.html}</span></div></div><button class="btn block ${r.ok?'':'red'}" data-act="ptnext">Continuer</button>`
+   :`<div class="row"><button class="btn ghost" style="flex:none" data-act="ptcheck:skip">Je ne sais pas</button><button class="btn block" data-act="ptcheck">Vérifier</button></div>`}</div></div>`;
+  if(!r)setTimeout(()=>{const i=$('#ptin');if(i)i.focus()},30);
 }
-function ptPick(i){
-  if(!PT||PT.picked!=null)return;
-  PT.picked=+i;const ok=i>=0&&PT.q.opts[i]===PT.q.ans;
-  ok?(PT.ok++,sndOk()):(PT.bad++,sndBad());PT.n++;
-  if(PT.q.kind==='cloze'||!ok)speak(PT.q.d.es);
-  renderPT();
+function ptCheck(skip){
+  if(!PT||PT.res)return;
+  const q=PT.q,inp=$('#ptin');PT.typed=skip?'':(inp?inp.value:'');
+  if(!skip&&!PT.typed.trim()){toast('Écris ta réponse, ou touche « Je ne sais pas »');return}
+  let ok=false,html;
+  if(q.kind==='cloze'){
+    ok=!skip&&['exact','accent','close'].includes(judgeTyped(PT.typed,q.z.word));
+    html=`<b>${esc(q.d.es)}</b>`;
+  }else{
+    const s=oralScore(q.d.es,PT.typed);
+    ok=!skip&&s.score>=(q.kind==='listen'?.8:.7);
+    html=`<b>${spokenHtml(q.d.es,s.hit)}</b>${q.kind==='listen'?`<br>${esc(q.d.fr)}`:''}`;
+  }
+  PT.res={ok,html};ok?(PT.ok++,sndOk()):(PT.bad++,sndBad());PT.n++;
+  renderPT();if(q.kind!=='listen')speak(q.d.es);
 }
 function ptNext(){
-  PT.picked=null;PT.k++;
+  PT.res=null;PT.typed='';PT.k++;
   if(PT.ok>=3){PT.passed++;PT.band++;PT.k=PT.ok=PT.bad=0;if(PT.band>=PBANDS.length)return ptEnd()}
   else if(PT.bad>=2)return ptEnd();
   PT.q=makePQ(PT.band,PT.k);renderPT();
-  if(PT.q.kind==='qcm')speak(PT.q.d.es);
+  if(PT.q.kind==='listen')speak(PT.q.d.es);
 }
 function ptEnd(){
   const n=PT.passed,lv=n?PBANDS[n-1][3]:'Débutant',t=today();let marked=0;
@@ -3046,8 +3068,9 @@ function doAct(a){
     case 'offline':precacheAll();break;
     case 'talk':startTalk(arg);break;
     case 'talkRandom':randomTalk();break;
-    case 'placement':startPlacement();if(PT&&PT.q.kind==='qcm')speak(PT.q.d.es);break;
-    case 'ptpick':ptPick(+arg);break;
+    case 'placement':startPlacement();break;
+    case 'ptcheck':ptCheck(arg==='skip');break;
+    case 'ptslow':if(PT)speak(PT.q.d.es,.55);break;
     case 'ptnext':ptNext();break;
     case 'ptsay':if(PT)speak(PT.q.d.es);break;
     case 'ptquit':if(confirm('Arrêter le test ? Rien ne sera modifié.')){PT=null;closeSheet()}break;
@@ -3083,7 +3106,7 @@ document.addEventListener('keydown',e=>{
     if(e.key==='Escape')closeSheet();
     else if(e.key==='Enter'&&document.activeElement&&document.activeElement.id==='persoIn'){const b=$('[data-act^="persoOk"]');if(b)doAct(b.dataset.act)}
     else if(e.key==='Enter'&&ST&&!ST.wait){e.preventDefault();ST.over?closeSheet():advanceStory()}
-    else if(PT){if(/^[1-4]$/.test(e.key)&&PT.picked==null)ptPick(+e.key-1);else if(e.key==='Enter'&&PT.picked!=null){e.preventDefault();ptNext()}}
+    else if(PT){if(e.key==='Enter'){e.preventDefault();PT.res?ptNext():ptCheck(false)}}
     else if(ST&&ST.wait&&/^[1-3]$/.test(e.key))storyAnswer(ST.shown.length-1,+e.key-1);
     return;
   }
