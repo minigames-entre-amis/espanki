@@ -1778,7 +1778,7 @@ function logReview(r){
 function applyRating(id,r){
   const c=getCard(id),o=plans(c)[r],t=today();
   if(c.state==='new'){S.daily.newDone++;quest('newc')}
-  Object.assign(c,{s:o.s,d:o.d,last:t,state:o.state,step:o.step});
+  Object.assign(c,{s:o.s,d:o.d,last:t,state:o.state,step:o.step});delete c.placed;
   if(o.lapse)c.lapses++;
   if(o.state==='review'&&!o.requeue){
     let iv=o.interval;
@@ -1860,7 +1860,7 @@ function confetti(n=140){
 }
 
 /* ============ BADGES ============ */
-function learnedCount(){return Object.values(S.cards).filter(c=>c.state==='review').length}
+function learnedCount(){return Object.values(S.cards).filter(c=>c.state==='review'&&!c.placed).length}
 function checkBadges(extra={}){
   const got=[];
   const give=k=>{if(!S.badges[k]){S.badges[k]=dstr(today());got.push(k)}};
@@ -2003,7 +2003,7 @@ function viewHome(){
       <div class="disc">${ring(p,84,8,col)}<i style="background:${col}">${k<cur?'⭐':state==='🔒'?'🔒':k}</i></div>
       <b>${TITLES[i%TITLES.length]}</b><small>Étape ${k} · ${done}/${STEP}</small></div>`;
   }).join('');
-  return `${SHARED?installCard():backupCard()}
+  return `${SHARED?installCard():backupCard()}${placementCard()}
   <div class="card"><div class="hero"><div class="parrot">🦜</div><div class="bubble">${msg}</div></div>
     <div class="goal"><div class="ring">${ring(g,84,10,g>=1?'var(--yellow)':'var(--green)')}<b>${S.daily.xp}</b></div>
       <div style="flex:1"><div>Objectif du jour : ${S.daily.xp}/${S.set.goal} XP ${S.daily.goalHit?'✅':''}</div>
@@ -2072,6 +2072,7 @@ function viewSet(){
   <label>Exercices oraux (micro)</label>${sel('oral',[[true,'Activés'],[false,'Désactivés']])}
   <p class="mute" style="margin:6px 0 0;font-size:13px">${SRec?'Lire à voix haute : la reconnaissance vocale du navigateur vérifie ta prononciation (Edge ou Chrome, connexion Internet nécessaire).':'Ce navigateur ne propose pas la reconnaissance vocale : seul l\'exercice « répéter » (enregistrement de ta voix comparé au modèle) est disponible.'} Le bouton « Pas maintenant » les met en pause jusqu'à la leçon suivante.</p></div>
   ${'serviceWorker' in navigator&&location.protocol==='https:'?`<h2>Hors ligne</h2><div class="card"><p class="mute" style="margin-top:0">Les sons et images se gardent au fur et à mesure. Pour tout avoir d'un coup (≈ 20 Mo, de préférence en Wi-Fi) :</p><button class="btn blue block" data-act="offline">📥 Tout télécharger pour le hors-ligne</button></div>`:''}
+  <h2>Test de niveau</h2><div class="card"><p class="mute" style="margin-top:0">${S.placed?`Dernier test : niveau ${esc(S.placed.level)} (${esc(S.placed.date)}). `:''}Le test ne fait que débloquer des phrases : il ne retire jamais ta progression.</p><button class="btn ghost block" data-act="placement">🧭 ${S.placed?'Refaire':'Faire'} le test de niveau</button></div>
   <h2>Sauvegarde</h2><div class="card">${backupCard()}<div class="row"><button class="btn blue" data-act="exportJson">Exporter</button><button class="btn ghost" data-act="importJson">Importer</button></div>
   <input type="file" id="jsonFile" accept=".json" class="hidden">
   <p class="mute">Tes données sont stockées dans ce navigateur. Exporte-les de temps en temps !</p>
@@ -2639,7 +2640,7 @@ function openGram(id){
   $('#sheet').classList.remove('hidden');$('#sheet').querySelector('.lbody').scrollTop=0;
 }
 function closeSheet(){
-  hideGloss();ST=null;try{player.pause()}catch(e){}
+  hideGloss();ST=null;PT=null;try{player.pause()}catch(e){}
   $('#sheet').classList.add('hidden');$('#sheet').innerHTML='';
   if(!L)render();
 }
@@ -2685,6 +2686,79 @@ function readTeaser(){
   const s=STORIES.find(x=>storyOpen(x)&&!S.stories[x.id]);
   if(!s)return '';
   return `<div class="card teaser" data-act="story:${s.id}"><span>${s.icon}</span><div><b>Nouvelle histoire : ${esc(s.title)}</b><div class="mute">${esc(s.fr)} · +15 XP</div></div><b class="go">›</b></div>`;
+}
+
+/* ============ TEST DE NIVEAU ============
+   8 paliers de 5 unités (les unités sont classées par difficulté). À chaque palier : jusqu'à 4 questions
+   (compréhension + mot manquant). 3 bonnes réponses = palier réussi ; 2 erreurs = fin du test.
+   Les phrases des paliers réussis deviennent « connues » et reviennent peu à peu en révision pour vérification. */
+const PBANDS=[[1,5,'Premiers pas','A1'],[6,10,'Les bases','A1'],[11,15,'Vie quotidienne','A2'],[16,20,'Raconter','A2'],
+  [21,25,'Échanger','A2+'],[26,30,'Opinions','B1'],[31,35,'Nuances','B1'],[36,40,'Aisance','B1+']];
+let PT=null;
+function placementCard(){
+  if(S.placed||S.stats.reviews>20)return '';
+  return `<div class="card teaser" data-act="placement" style="margin-top:0;margin-bottom:12px;border-color:var(--purple)"><span>🧭</span><div><b>Tu parles déjà un peu espagnol ?</b><div class="mute">Fais le test de niveau (3 à 8 min) pour ne pas recommencer à zéro.</div></div><b class="go">›</b></div>`;
+}
+function bandDefs(i){const [a,b]=PBANDS[i];return allDefs().filter(d=>!d.pic&&d.u>=a&&d.u<=b)}
+function makePQ(i,k){
+  const defs=shuffle(bandDefs(i)),used=PT?PT.used:new Set();
+  const d=defs.find(x=>!used.has(x.id))||defs[0];used.add(d.id);
+  if(k%2===1){const z=makeCloze(d);if(z&&z.opts)return {kind:'cloze',d,z,opts:z.opts,ans:z.word}}
+  const pool=shuffle(allDefs().filter(x=>!x.pic&&x.id!==d.id&&x.fr!==d.fr&&Math.abs(x.u-d.u)<=6)).slice(0,3).map(x=>x.fr);
+  return {kind:'qcm',d,opts:shuffle([d.fr,...pool]),ans:d.fr};
+}
+function startPlacement(){
+  PT={band:0,k:0,ok:0,bad:0,passed:0,used:new Set(),n:0,q:null,picked:null};
+  PT.q=makePQ(0,0);
+  $('#sheet').classList.remove('hidden');renderPT();
+}
+function renderPT(){
+  const q=PT.q,b=PBANDS[PT.band],fb=PT.picked!=null;
+  let prompt;
+  if(q.kind==='qcm')prompt=`<div class="q">Que veut dire cette phrase ?</div><div class="prompt"><button class="spk" data-act="ptsay">🔊</button><span>${esc(q.d.es)}</span></div>`;
+  else prompt=`<div class="q">Choisis le mot manquant</div><div class="prompt"><span>${q.z.ch.map((c,i)=>i===q.z.idx?`${esc(c.pre)}<span class="blank ${fb?(q.opts[PT.picked]===q.ans?'ok':'bad'):''}">${fb?esc(c.w):'&nbsp;'}</span>${esc(c.post)}`:esc(c.raw)).join(' ')}</span></div><div class="hint">💡 ${esc(q.d.fr)}</div>`;
+  const opts=q.opts.map((o,i)=>{let c='';if(fb)c='dis '+(o===q.ans?'right':i===PT.picked?'wrong':'');
+    return `<button class="choice ${c}" data-act="ptpick:${i}"><kbd>${i+1}</kbd>${esc(o)}</button>`}).join('');
+  $('#sheet').innerHTML=`<div class="ltop"><button class="x" data-act="ptquit">✕</button><div class="pbar"><i style="width:${100*PT.band/PBANDS.length}%;background:var(--purple)"></i></div><span class="tag" style="background:var(--purple)">${b[3]}</span></div>
+  <div class="lbody"><div class="mute">Test de niveau · palier ${PT.band+1}/${PBANDS.length} : ${b[2]}</div>${prompt}<div class="choices ${q.kind==='cloze'?'words':''}">${opts}</div></div>
+  <div class="lfoot"><div>${fb?`<button class="btn block" data-act="ptnext">Continuer</button>`:`<button class="btn ghost block" data-act="ptpick:-1">Je ne sais pas</button>`}</div></div>`;
+}
+function ptPick(i){
+  if(!PT||PT.picked!=null)return;
+  PT.picked=+i;const ok=i>=0&&PT.q.opts[i]===PT.q.ans;
+  ok?(PT.ok++,sndOk()):(PT.bad++,sndBad());PT.n++;
+  if(PT.q.kind==='cloze'||!ok)speak(PT.q.d.es);
+  renderPT();
+}
+function ptNext(){
+  PT.picked=null;PT.k++;
+  if(PT.ok>=3){PT.passed++;PT.band++;PT.k=PT.ok=PT.bad=0;if(PT.band>=PBANDS.length)return ptEnd()}
+  else if(PT.bad>=2)return ptEnd();
+  PT.q=makePQ(PT.band,PT.k);renderPT();
+  if(PT.q.kind==='qcm')speak(PT.q.d.es);
+}
+function ptEnd(){
+  const n=PT.passed,lv=n?PBANDS[n-1][3]:'Débutant',t=today();let marked=0;
+  if(n){
+    const maxU=PBANDS[n-1][1];
+    /* on ne touche jamais à ce qui a déjà été révisé */
+    const ids=shuffle(allDefs().filter(d=>((!d.pic&&d.u<=maxU)||(d.pic&&n>=2))&&!(S.cards[d.id]&&S.cards[d.id].state!=='new')));
+    /* étalées sur plusieurs semaines : environ 15 vérifications par jour au maximum */
+    const span=Math.min(60,Math.max(14,Math.ceil(ids.length/15)));
+    for(const [j,d] of ids.entries()){
+      const iv=1+Math.floor(j*span/ids.length),s=Math.max(5,iv*1.5),due=t+iv;
+      S.cards[d.id]={id:d.id,state:'review',s,d:5,last:t,interval:iv,due,step:0,reps:1,lapses:0,ease:2.5,placed:1};marked++;
+    }
+  }
+  S.placed={date:dstr(t),bands:n,level:lv};save();
+  const st=curStep();
+  $('#sheet').innerHTML=`<div class="lbody"><div class="sum"><div class="parrot">🧭</div><h1>Niveau ${esc(lv)}</h1>
+   <p style="font-size:17px">${n?`Tu as validé ${n} palier${n>1?'s':''} sur ${PBANDS.length} : tu commences à l'<b>étape ${st}</b>.`:'Pas de souci : tu commences au début, c\'est le plus efficace pour toi.'}</p>
+   ${n?`<p class="mute">${marked} phrases et mots sont marqués comme connus. Ils reviendront peu à peu dans tes révisions (environ ${Math.min(15,Math.ceil(marked/14))} par jour pendant quelques semaines) : si tu en rates un, il repasse en apprentissage.</p>`:''}
+   ${n===PBANDS.length?'<p class="mute">Bravo, tu as tout validé ! Profite des histoires et des conversations avec une IA (onglet Lire) pour progresser encore.</p>':''}
+   <p class="mute">Tu pourras refaire ce test dans les Réglages.</p></div></div>
+   <div class="lfoot"><div><button class="btn block" data-act="closeSheet">C'est parti !</button></div></div>`;
+  sndWin();confetti(100);PT=null;
 }
 
 /* ============ CONVERSATION AVEC UNE IA (ChatGPT / Claude, compte de l'utilisateur) ============
@@ -2972,6 +3046,11 @@ function doAct(a){
     case 'offline':precacheAll();break;
     case 'talk':startTalk(arg);break;
     case 'talkRandom':randomTalk();break;
+    case 'placement':startPlacement();if(PT&&PT.q.kind==='qcm')speak(PT.q.d.es);break;
+    case 'ptpick':ptPick(+arg);break;
+    case 'ptnext':ptNext();break;
+    case 'ptsay':if(PT)speak(PT.q.d.es);break;
+    case 'ptquit':if(confirm('Arrêter le test ? Rien ne sera modifié.')){PT=null;closeSheet()}break;
     case 'talkGo':{const p=a.split(':'),t=TALKS.find(x=>x.id===p[1]);if(!t)break;
       if(p[2]==='voice')voiceGuide(t);else{closeSheetOnly();openAI(talkPrompt(t,'write'))}break}
     case 'talkOpen':{const p=a.split(':'),t=TALKS.find(x=>x.id===p[1]);if(!t)break;closeSheetOnly();openAI(talkPrompt(t,p[2]));break}
@@ -3004,6 +3083,7 @@ document.addEventListener('keydown',e=>{
     if(e.key==='Escape')closeSheet();
     else if(e.key==='Enter'&&document.activeElement&&document.activeElement.id==='persoIn'){const b=$('[data-act^="persoOk"]');if(b)doAct(b.dataset.act)}
     else if(e.key==='Enter'&&ST&&!ST.wait){e.preventDefault();ST.over?closeSheet():advanceStory()}
+    else if(PT){if(/^[1-4]$/.test(e.key)&&PT.picked==null)ptPick(+e.key-1);else if(e.key==='Enter'&&PT.picked!=null){e.preventDefault();ptNext()}}
     else if(ST&&ST.wait&&/^[1-3]$/.test(e.key))storyAnswer(ST.shown.length-1,+e.key-1);
     return;
   }
